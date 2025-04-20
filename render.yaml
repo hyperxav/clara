@@ -3,7 +3,7 @@ services:
     name: clara-bot
     env: python
     plan: free
-    schedule: "0 9,15,21 * * *"  # Posts at 9 AM, 3 PM, and 9 PM UTC
+    schedule: "0 7,13,19 * * *"  # Posts at 9 AM, 3 PM, and 9 PM Paris time (accounting for UTC+2 summer time)
     buildCommand: pip install -r requirements.txt
     startCommand: python clara_bot.py
     envVars:
