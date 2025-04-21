@@ -287,14 +287,6 @@ def main():
         logger.info("Starting Clara bot...")
         clara = ClaraBot()
         
-        # Test authentication first
-        try:
-            me = clara.twitter.get_me()
-            logger.info(f"Authenticated as @{me.data.username}")
-        except Exception as e:
-            logger.error(f"Twitter authentication failed: {e}")
-            raise e
-        
         clara.post_tweet()
         logger.info("Tweet posted successfully!")
     except Exception as e:
