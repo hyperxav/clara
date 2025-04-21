@@ -38,8 +38,7 @@ def init_twitter_client() -> tweepy.Client:
                 consumer_secret=os.getenv('TWITTER_API_SECRET'),
                 access_token=os.getenv('TWITTER_ACCESS_TOKEN'),
                 access_token_secret=os.getenv('TWITTER_ACCESS_SECRET'),
-                wait_on_rate_limit=True,
-                timeout=30  # Increase timeout
+                wait_on_rate_limit=True
             )
             
             # Test the connection with a simple API call
