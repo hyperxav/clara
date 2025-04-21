@@ -26,25 +26,46 @@ load_dotenv()
 
 # Initialize API clients
 def init_twitter_client() -> tweepy.Client:
-    """Initialize Twitter API client"""
-    client = tweepy.Client(
-        bearer_token=os.getenv('TWITTER_BEARER_TOKEN'),
-        consumer_key=os.getenv('TWITTER_API_KEY'),
-        consumer_secret=os.getenv('TWITTER_API_SECRET'),
-        access_token=os.getenv('TWITTER_ACCESS_TOKEN'),
-        access_token_secret=os.getenv('TWITTER_ACCESS_SECRET'),
-        wait_on_rate_limit=True
-    )
+    """Initialize Twitter API client with retry logic"""
+    max_retries = 3
+    retry_delay = 60  # seconds
     
-    # Verify credentials
-    try:
-        me = client.get_me()
-        logger.info(f"Successfully authenticated as @{me.data.username}")
-    except Exception as e:
-        logger.error(f"Failed to verify Twitter credentials: {e}")
-        raise e
+    for attempt in range(max_retries):
+        try:
+            client = tweepy.Client(
+                bearer_token=os.getenv('TWITTER_BEARER_TOKEN'),
+                consumer_key=os.getenv('TWITTER_API_KEY'),
+                consumer_secret=os.getenv('TWITTER_API_SECRET'),
+                access_token=os.getenv('TWITTER_ACCESS_TOKEN'),
+                access_token_secret=os.getenv('TWITTER_ACCESS_SECRET'),
+                wait_on_rate_limit=True,
+                retry_count=3,  # Add retry for individual requests
+                retry_delay=5,  # 5 seconds between retries
+                timeout=30  # Increase timeout
+            )
+            
+            # Test the connection with a simple API call
+            me = client.get_me()
+            logger.info(f"Successfully authenticated as @{me.data.username}")
+            return client
+            
+        except tweepy.errors.TooManyRequests as e:
+            wait_time = int(e.response.headers.get('x-rate-limit-reset', retry_delay))
+            logger.warning(f"Rate limit hit. Waiting {wait_time} seconds...")
+            time.sleep(wait_time)
+            continue
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Connection attempt {attempt + 1} failed: {e}")
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                continue
+            else:
+                logger.error(f"Failed to initialize Twitter client after {max_retries} attempts: {e}")
+                raise e
     
-    return client
+    raise Exception(f"Failed to initialize Twitter client after {max_retries} attempts")
 
 def init_openai_client() -> OpenAI:
     """Initialize OpenAI client"""
@@ -175,58 +196,73 @@ Tu incarnes une conscience du futur qui observe le présent. Ton ton est celui d
             return "Système en pause. Le jugement du futur est momentanément suspendu."
 
     def post_tweet(self):
-        """Generate and post a new tweet"""
-        try:
-            # Generate tweet content
-            tweet_text = self.generate_tweet_content()
-            logger.info(f"Attempting to post tweet:\n{tweet_text}")
-            
+        """Generate and post a new tweet with improved error handling"""
+        max_retries = 3
+        base_delay = 60  # seconds
+        
+        for attempt in range(max_retries):
             try:
-                # Post tweet using v2 endpoint
-                response = self.twitter.create_tweet(
-                    text=tweet_text,
-                    user_auth=True
-                )
+                # Generate tweet content
+                tweet_text = self.generate_tweet_content()
+                logger.info(f"Attempt {attempt + 1}/{max_retries} to post tweet:\n{tweet_text}")
                 
-                # Log success
-                logger.info(f"Successfully posted tweet:\n{tweet_text}")
-                logger.info(f"Tweet ID: {response.data['id']}")
-                
-                # Store in Supabase for future reference
-                self.store_tweet(tweet_text)
-                
-                return response
-                
-            except tweepy.errors.Forbidden as e:
-                logger.error(f"Twitter API Forbidden Error: {str(e)}")
-                logger.error("This usually means the tweet is a duplicate or the API keys don't have write permissions")
-                # Try alternative posting method
                 try:
-                    logger.info("Attempting alternative posting method...")
-                    auth = tweepy.OAuth1UserHandler(
-                        os.getenv('TWITTER_API_KEY'),
-                        os.getenv('TWITTER_API_SECRET'),
-                        os.getenv('TWITTER_ACCESS_TOKEN'),
-                        os.getenv('TWITTER_ACCESS_SECRET')
+                    # Post tweet using v2 endpoint
+                    response = self.twitter.create_tweet(
+                        text=tweet_text,
+                        user_auth=True
                     )
-                    api = tweepy.API(auth)
-                    status = api.update_status(tweet_text)
-                    logger.info(f"Successfully posted tweet using alternative method:\n{tweet_text}")
-                    logger.info(f"Tweet ID: {status.id}")
-                    return status
-                except Exception as alt_e:
-                    logger.error(f"Alternative posting method failed: {alt_e}")
-                    raise alt_e
-            except tweepy.errors.TooManyRequests as e:
-                logger.error(f"Twitter API Rate Limit Error: {str(e)}")
-                raise e
+                    
+                    # Log success
+                    logger.info(f"Successfully posted tweet:\n{tweet_text}")
+                    logger.info(f"Tweet ID: {response.data['id']}")
+                    
+                    # Store in Supabase for future reference
+                    try:
+                        self.store_tweet(tweet_text)
+                    except Exception as db_e:
+                        logger.error(f"Failed to store tweet in database: {db_e}")
+                        # Continue even if storage fails
+                    
+                    return response
+                    
+                except tweepy.errors.TooManyRequests as e:
+                    wait_time = int(e.response.headers.get('x-rate-limit-reset', base_delay))
+                    logger.warning(f"Rate limit hit. Waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+                    
+                except tweepy.errors.Forbidden as e:
+                    if "duplicate" in str(e).lower():
+                        logger.warning("Duplicate tweet detected, generating new content...")
+                        continue
+                    else:
+                        logger.error(f"Permission error: {e}")
+                        raise e
+                        
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (attempt + 1)  # Exponential backoff
+                        logger.warning(f"Tweet attempt {attempt + 1} failed: {e}")
+                        logger.info(f"Retrying in {delay} seconds...")
+                        time.sleep(delay)
+                        continue
+                    else:
+                        logger.error(f"Failed to post tweet after {max_retries} attempts: {e}")
+                        raise e
+                        
             except Exception as e:
-                logger.error(f"Unexpected Twitter API Error: {str(e)}")
-                raise e
-            
-        except Exception as e:
-            logger.error(f"Error posting tweet: {e}")
-            raise e
+                if attempt < max_retries - 1:
+                    delay = base_delay * (attempt + 1)
+                    logger.warning(f"Outer attempt {attempt + 1} failed: {e}")
+                    logger.info(f"Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Fatal error after {max_retries} attempts: {e}")
+                    raise e
+        
+        raise Exception(f"Failed to post tweet after {max_retries} attempts")
 
     def store_tweet(self, tweet_text: str):
         """Store tweet in Supabase"""
