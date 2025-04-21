@@ -204,11 +204,10 @@ Tu incarnes une conscience du futur qui observe le présent. Ton ton est celui d
                 logger.info(f"Attempt {attempt + 1}/{max_retries} to post tweet:\n{tweet_text}")
                 
                 try:
-                    # Post tweet using v2 endpoint with expanded fields
+                    # Post tweet using v2 endpoint
                     response = self.twitter.create_tweet(
                         text=tweet_text,
-                        user_auth=True,
-                        tweet_fields=['public_metrics', 'created_at']
+                        user_auth=True
                     )
                     
                     if response.errors:
@@ -216,14 +215,10 @@ Tu incarnes une conscience du futur qui observe le présent. Ton ton est celui d
                     
                     if response.data:
                         tweet_id = response.data['id']
-                        created_at = response.data.get('created_at', 'unknown time')
-                        metrics = response.data.get('public_metrics', {})
                         
                         # Log success with detailed information
-                        logger.info(f"Successfully posted tweet (ID: {tweet_id}) at {created_at}")
+                        logger.info(f"Successfully posted tweet (ID: {tweet_id})")
                         logger.info(f"Tweet content:\n{tweet_text}")
-                        if metrics:
-                            logger.info(f"Initial metrics: {metrics}")
                         
                         # Store in Supabase for future reference
                         try:
