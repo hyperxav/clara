@@ -41,16 +41,16 @@ def init_twitter_client() -> tweepy.Client:
                 wait_on_rate_limit=True
             )
             
-            # Test the connection with a simple API call
-            me = client.get_me()
-            logger.info(f"Successfully authenticated as @{me.data.username}")
+            logger.info("Twitter client initialized")
             return client
             
-        except tweepy.errors.TooManyRequests as e:
-            wait_time = int(e.response.headers.get('x-rate-limit-reset', retry_delay))
-            logger.warning(f"Rate limit hit. Waiting {wait_time} seconds...")
-            time.sleep(wait_time)
-            continue
+        except tweepy.errors.Unauthorized as e:
+            logger.error(f"Authentication failed: {e.response.text}")
+            raise e
+            
+        except tweepy.errors.BadRequest as e:
+            logger.error(f"Bad request error: {e.response.text}")
+            raise e
             
         except Exception as e:
             if attempt < max_retries - 1:
@@ -204,29 +204,47 @@ Tu incarnes une conscience du futur qui observe le présent. Ton ton est celui d
                 logger.info(f"Attempt {attempt + 1}/{max_retries} to post tweet:\n{tweet_text}")
                 
                 try:
-                    # Post tweet using v2 endpoint
+                    # Post tweet using v2 endpoint with expanded fields
                     response = self.twitter.create_tweet(
                         text=tweet_text,
-                        user_auth=True
+                        user_auth=True,
+                        tweet_fields=['public_metrics', 'created_at']
                     )
                     
-                    # Log success
-                    logger.info(f"Successfully posted tweet:\n{tweet_text}")
-                    logger.info(f"Tweet ID: {response.data['id']}")
+                    if response.errors:
+                        logger.warning(f"Tweet posted but with errors: {response.errors}")
                     
-                    # Store in Supabase for future reference
-                    try:
-                        self.store_tweet(tweet_text)
-                    except Exception as db_e:
-                        logger.error(f"Failed to store tweet in database: {db_e}")
-                        # Continue even if storage fails
-                    
-                    return response
+                    if response.data:
+                        tweet_id = response.data['id']
+                        created_at = response.data.get('created_at', 'unknown time')
+                        metrics = response.data.get('public_metrics', {})
+                        
+                        # Log success with detailed information
+                        logger.info(f"Successfully posted tweet (ID: {tweet_id}) at {created_at}")
+                        logger.info(f"Tweet content:\n{tweet_text}")
+                        if metrics:
+                            logger.info(f"Initial metrics: {metrics}")
+                        
+                        # Store in Supabase for future reference
+                        try:
+                            self.store_tweet(tweet_text)
+                            logger.info("Tweet stored in database")
+                        except Exception as db_e:
+                            logger.error(f"Failed to store tweet in database: {db_e}")
+                            # Continue even if storage fails
+                        
+                        return response
                     
                 except tweepy.errors.TooManyRequests as e:
-                    wait_time = int(e.response.headers.get('x-rate-limit-reset', base_delay))
-                    logger.warning(f"Rate limit hit. Waiting {wait_time} seconds...")
-                    time.sleep(wait_time)
+                    headers = e.response.headers
+                    remaining = headers.get('x-rate-limit-remaining', '0')
+                    limit = headers.get('x-rate-limit-limit', 'unknown')
+                    reset_time = int(headers.get('x-rate-limit-reset', base_delay))
+                    logger.warning(
+                        f"Rate limit hit. {remaining}/{limit} calls remaining. "
+                        f"Waiting {reset_time} seconds for reset..."
+                    )
+                    time.sleep(reset_time)
                     continue
                     
                 except tweepy.errors.Forbidden as e:
@@ -234,9 +252,18 @@ Tu incarnes une conscience du futur qui observe le présent. Ton ton est celui d
                         logger.warning("Duplicate tweet detected, generating new content...")
                         continue
                     else:
-                        logger.error(f"Permission error: {e}")
+                        logger.error(f"Permission error: {e.response.text}")
                         raise e
                         
+                except tweepy.errors.BadRequest as e:
+                    logger.error(f"Bad request error: {e.response.text}")
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (attempt + 1)  # Exponential backoff
+                        logger.info(f"Retrying in {delay} seconds...")
+                        time.sleep(delay)
+                        continue
+                    raise e
+                    
                 except Exception as e:
                     if attempt < max_retries - 1:
                         delay = base_delay * (attempt + 1)  # Exponential backoff
@@ -247,7 +274,7 @@ Tu incarnes une conscience du futur qui observe le présent. Ton ton est celui d
                     else:
                         logger.error(f"Failed to post tweet after {max_retries} attempts: {e}")
                         raise e
-                        
+                    
             except Exception as e:
                 if attempt < max_retries - 1:
                     delay = base_delay * (attempt + 1)
