@@ -39,8 +39,6 @@ def init_twitter_client() -> tweepy.Client:
                 access_token=os.getenv('TWITTER_ACCESS_TOKEN'),
                 access_token_secret=os.getenv('TWITTER_ACCESS_SECRET'),
                 wait_on_rate_limit=True,
-                retry_count=3,  # Add retry for individual requests
-                retry_delay=5,  # 5 seconds between retries
                 timeout=30  # Increase timeout
             )
             
